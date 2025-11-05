@@ -1,77 +1,127 @@
-import paho.mqtt.client as paho
-import time
-import streamlit as st
+# ================= MQTT Control de Luces — UI negro/blanco =================
 import json
 import platform
+import time
+import paho.mqtt.client as paho
+import streamlit as st
 
-# Muestra la versión de Python junto con detalles adicionales
-st.write("Versión de Python:", platform.python_version())
+# -------------------- Config de página --------------------
+st.set_page_config(
+    page_title="Control de Luces (MQTT)",
+    page_icon="💡",
+    layout="centered",
+    initial_sidebar_state="collapsed",
+)
 
-values = 0.0
-act1="OFF"
+# -------------------- Estilos globales --------------------
+st.markdown(
+    """
+    <style>
+      :root { --bg:#0b0b0b; --fg:#f5f5f5; --muted:#cfcfcf; --chip:#151515; --chip-b:#2a2a2a; }
+      html, body, [data-testid="stAppViewContainer"] { background: var(--bg) !important; color: var(--fg) !important; }
+      [data-testid="stMarkdownContainer"] h1, h2, h3, h4, h5, h6 { color: var(--fg) !important; }
+      .stAlert div{ color: var(--fg) !important; }
+      input, textarea { background:#0f0f0f !important; color:var(--fg) !important; border:1px solid #2a2a2a !important; }
+      .stNumberInput input { background:#0f0f0f !important; color:var(--fg) !important; }
+      .chip {
+        display:inline-flex; gap:.5rem; align-items:center; padding:.35rem .7rem;
+        border:1px solid var(--chip-b); background:var(--chip); color:var(--muted);
+        border-radius:999px; font-size:.85rem;
+      }
+      .chip b{ color:var(--fg); }
+      div.stButton > button {
+        width: 100% !important; border-radius: 12px; padding:.8rem 1rem;
+        border:1px solid #2a2a2a; background:#111; color:#fff; font-weight:600;
+      }
+      div.stButton > button:hover { background:#1a1a1a; }
+      .stSlider > div[data-baseweb="slider"] > div { color:var(--fg) !important; }
+      .stMetric { border:1px solid #2a2a2a; border-radius:12px; padding:10px; background:#0f0f0f; }
+      hr { border-top:1px solid #2a2a2a !important; }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
 
-def on_publish(client,userdata,result):             #create function for callback
-    print("el dato ha sido publicado \n")
-    pass
+# -------------------- Estado --------------------
+if "last_payload" not in st.session_state:
+    st.session_state.last_payload = None
+if "publish_status" not in st.session_state:
+    st.session_state.publish_status = None
 
-def on_message(client, userdata, message):
-    global message_received
-    time.sleep(2)
-    message_received=str(message.payload.decode("utf-8"))
-    st.write(message_received)
+# -------------------- Sidebar (conexión) --------------------
+with st.sidebar:
+    st.subheader("⚙️ Conexión MQTT")
+    broker = st.text_input("Broker", value="157.230.214.127")
+    port = st.number_input("Puerto", value=1883, min_value=1, max_value=65535, step=1)
+    client_id = st.text_input("Client ID", value="streamlit-pub")
+    topic_switch = st.text_input("Tópico ON/OFF", value="cmqtt_s")
+    topic_analog = st.text_input("Tópico analógico", value="cmqtt_a")
 
-        
+# -------------------- Cabecera --------------------
+st.caption("PUBLICACIÓN MQTT")
+st.markdown("## 💡 Control de Luces")
 
+st.write(
+    f"""
+    <span class="chip"><b>Broker</b> {broker}</span>
+    &nbsp;&nbsp;
+    <span class="chip"><b>Puerto</b> {port}</span>
+    &nbsp;&nbsp;
+    <span class="chip"><b>Python</b> {platform.python_version()}</span>
+    """,
+    unsafe_allow_html=True,
+)
 
-broker="157.230.214.127"
-port=1883
-client1= paho.Client("GIT-HUB")
-client1.on_message = on_message
+st.divider()
 
+# -------------------- Helper de publicación --------------------
+def publish_message(broker: str, port: int, client_id: str, topic: str, payload: dict, qos: int = 0, keepalive: int = 60):
+    """
+    Publica un payload JSON en un tópico MQTT. Devuelve (ok: bool, detalle: str).
+    """
+    try:
+        client = paho.Client(client_id=client_id, clean_session=True)
+        client.connect(broker, port, keepalive)
+        msg = json.dumps(payload)
+        res = client.publish(topic, msg, qos=qos)
+        # Esperar confirmación de envío (no garantía de recepción)
+        res.wait_for_publish(timeout=2.0)
+        client.disconnect()
+        return True, f"Publicado en '{topic}': {msg}"
+    except Exception as e:
+        return False, f"Error publicando en '{topic}': {e}"
 
+# -------------------- Controles principales --------------------
+col1, col2 = st.columns(2)
+with col1:
+    if st.button("🔼 Encender (ON)"):
+        ok, detail = publish_message(broker.strip(), int(port), client_id.strip(), topic_switch.strip(), {"Act1": "ON"})
+        st.session_state.publish_status = (ok, detail)
+with col2:
+    if st.button("🔽 Apagar (OFF)"):
+        ok, detail = publish_message(broker.strip(), int(port), client_id.strip(), topic_switch.strip(), {"Act1": "OFF"})
+        st.session_state.publish_status = (ok, detail)
 
-st.title("Control de luces")
+st.divider()
 
-if st.button('ON'):
-    act1="ON"
-    client1= paho.Client("GIT-HUB")                           
-    client1.on_publish = on_publish                          
-    client1.connect(broker,port)  
-    message =json.dumps({"Act1":act1})
-    ret= client1.publish("cmqtt_s", message)
- 
-    #client1.subscribe("Sensores")
-    
-    
-else:
-    st.write('')
+# Slider y envío analógico
+value = st.slider("Selecciona valor analógico", 0.0, 100.0, 50.0, 1.0)
+if st.button("📤 Enviar valor analógico"):
+    ok, detail = publish_message(
+        broker.strip(), int(port), client_id.strip(), topic_analog.strip(), {"Analog": float(value)}
+    )
+    st.session_state.publish_status = (ok, detail)
+    st.session_state.last_payload = {"Analog": float(value)}
 
-if st.button('OFF'):
-    act1="OFF"
-    client1= paho.Client("GIT-HUB")                           
-    client1.on_publish = on_publish                          
-    client1.connect(broker,port)  
-    message =json.dumps({"Act1":act1})
-    ret= client1.publish("cmqtt_s", message)
-  
-    
-else:
-    st.write('')
+# -------------------- Feedback --------------------
+if st.session_state.publish_status is not None:
+    ok, detail = st.session_state.publish_status
+    if ok:
+        st.success(f"✅ {detail}")
+    else:
+        st.error(f"❌ {detail}")
 
-values = st.slider('Selecciona el rango de valores',0.0, 100.0)
-st.write('Values:', values)
-
-if st.button('Enviar valor analógico'):
-    client1= paho.Client("GIT-HUB")                           
-    client1.on_publish = on_publish                          
-    client1.connect(broker,port)   
-    message =json.dumps({"Analog": float(values)})
-    ret= client1.publish("cmqtt_a", message)
-    
- 
-else:
-    st.write('')
-
-
-
-
+if st.session_state.last_payload is not None:
+    st.divider()
+    st.subheader("📦 Último payload enviado")
+    st.json(st.session_state.last_payload)
